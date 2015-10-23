@@ -97,6 +97,7 @@ def _itervariants(tuple vcf_fns, bytes region, tuple fieldspec,
     # statically typed variables
     cdef VariantCallFile *variant_file
     cdef Variant *variant
+    cdef bool gnv_rv # @TCC
 
     # work through multiple VCFs if provided
     for vcf_fn in vcf_fns:
@@ -113,9 +114,20 @@ def _itervariants(tuple vcf_fns, bytes region, tuple fieldspec,
                 raise StopIteration
         variant = new Variant(deref(variant_file))
 
+        gnv_rv = _get_next_variant(variant_file, variant)
+
+        # skip variants which come before region start (if region given)
+        if gnv_rv and region is not None:
+            tmp = region.split(b':')
+            if len(tmp) > 1:
+                region_start = int(tmp[1].split(b'-')[0])
+                while gnv_rv and variant.position < region_start:
+                    gnv_rv = _get_next_variant(variant_file, variant)
+
         # iterate over variants
-        while _get_next_variant(variant_file, variant):
+        while gnv_rv:
             yield _mkvrow(variant, fieldspec, filter_ids, flatten_filter)
+            gnv_rv = _get_next_variant(variant_file, variant)
 
         # clean up
         del variant_file
@@ -142,10 +154,22 @@ def _itervariants_with_condition(tuple vcf_fns, bytes region, tuple fieldspec,
             if not region_set:
                 raise StopIteration
         variant = new Variant(deref(variant_file))
+        
+        gnv_rv = _get_next_variant(variant_file, variant)
 
-        while i < n and _get_next_variant(variant_file, variant):
+        # skip variants which come before region start (if region given)
+        if gnv_rv and region is not None:
+            tmp = region.split(b':')
+            if len(tmp) > 1:
+                region_start = int(tmp[1].split(b'-')[0])
+                while gnv_rv and variant.position < region_start:
+                    gnv_rv = _get_next_variant(variant_file, variant)
+
+        # iterate over variants
+        while i < n and gnv_rv:
             if condition[i]:
                 yield _mkvrow(variant, fieldspec, filter_ids, flatten_filter)
+            gnv_rv = _get_next_variant(variant_file, variant)
             i += 1
 
         del variant_file
