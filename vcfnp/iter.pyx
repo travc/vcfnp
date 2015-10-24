@@ -97,7 +97,7 @@ def _itervariants(tuple vcf_fns, bytes region, tuple fieldspec,
     # statically typed variables
     cdef VariantCallFile *variant_file
     cdef Variant *variant
-    cdef bool gnv_rv # @TCC
+    cdef bool gnv_rv
 
     # work through multiple VCFs if provided
     for vcf_fn in vcf_fns:
@@ -120,7 +120,7 @@ def _itervariants(tuple vcf_fns, bytes region, tuple fieldspec,
         if gnv_rv and region is not None:
             tmp = region.split(b':')
             if len(tmp) > 1:
-                region_start = int(tmp[1].split(b'-')[0])
+                region_start = long(tmp[1].split(b'-')[0])
                 while gnv_rv and variant.position < region_start:
                     gnv_rv = _get_next_variant(variant_file, variant)
 
@@ -161,7 +161,7 @@ def _itervariants_with_condition(tuple vcf_fns, bytes region, tuple fieldspec,
         if gnv_rv and region is not None:
             tmp = region.split(b':')
             if len(tmp) > 1:
-                region_start = int(tmp[1].split(b'-')[0])
+                region_start = long(tmp[1].split(b'-')[0])
                 while gnv_rv and variant.position < region_start:
                     gnv_rv = _get_next_variant(variant_file, variant)
 
@@ -412,6 +412,7 @@ def _itercalldata(tuple vcf_fns, bytes region, tuple samples, int ploidy,
                   tuple fieldspec):
     cdef VariantCallFile *variant_file
     cdef Variant *variant
+    cdef bool gnv_rv 
 
     for vcf_fn in vcf_fns:
         variant_file = new VariantCallFile()
@@ -424,8 +425,20 @@ def _itercalldata(tuple vcf_fns, bytes region, tuple samples, int ploidy,
                 raise StopIteration
         variant = new Variant(deref(variant_file))
 
-        while _get_next_variant(variant_file, variant):
+        gnv_rv = _get_next_variant(variant_file, variant)
+
+        # skip variants which come before region start (if region given)
+        if gnv_rv and region is not None:
+            tmp = region.split(b':')
+            if len(tmp) > 1:
+                region_start = long(tmp[1].split(b'-')[0])
+                while gnv_rv and variant.position < region_start:
+                    gnv_rv = _get_next_variant(variant_file, variant)
+
+        # iterate over variants
+        while gnv_rv:
             yield _mkcrow(variant, samples, ploidy, fieldspec)
+            gnv_rv = _get_next_variant(variant_file, variant)
 
         del variant_file
         del variant
@@ -438,6 +451,7 @@ def _itercalldata_with_condition(tuple vcf_fns, bytes region, tuple samples,
     cdef Variant *variant
     cdef long i = 0
     cdef long n = len(condition)
+    cdef long region_start = 0
 
     for vcf_fn in vcf_fns:
         variant_file = new VariantCallFile()
@@ -450,13 +464,19 @@ def _itercalldata_with_condition(tuple vcf_fns, bytes region, tuple samples,
                 raise StopIteration
         variant = new Variant(deref(variant_file))
 
+        if region is not None:
+            tmp = region.split(b':')
+            if len(tmp) > 1:
+                region_start = long(tmp[1].split(b'-')[0])
+
         while i < n:
             # only worth parsing samples if we know we want the variant
             if condition[i]:
                 variant_file.parseSamples = True
                 if not _get_next_variant(variant_file, variant):
                     break
-                yield _mkcrow(variant, samples, ploidy, fieldspec)
+                if region_start > 0 and variant.position < region_start:
+                    yield _mkcrow(variant, samples, ploidy, fieldspec)
             else:
                 variant_file.parseSamples = False
                 if not _get_next_variant(variant_file, variant):
